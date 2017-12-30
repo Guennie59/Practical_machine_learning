@@ -1,0 +1,183 @@
+---
+title: "Analysis of Weight Lifting Exercises"
+author: "Guennie59"
+date: "December 30th, 2017"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(warn=-1)
+	
+```
+## Synopsis
+
+The data on weight lifting exercises from the authors cited in section acknowledgements below are being analyzed in order to predict the way exercises are being carried out. For this purpose the data cleaned up and divided into 3 data sets for training, testing of various models and verification. Furtheron the confusionmatrix of different models are being generated and evaluated for best model selection. Ultimately the best model is being applied to the validation set and the 20 cases which are required to answer the quiz. The accuracy of several models appear to be very high in a combination of Principal Component Analysis and the RandomForest algorithm in particular. 
+
+
+## Data Processing - Main steps 
+
+The data are processed in the following steps
+
+1. Data are downloaded from the links provided at course website
+2. Datasets are being cleaned up
+3. Data are being split up for cross validation
+4. Feature selection considerations
+5. Model generation and evaluation
+6. Processing the validation set for the best model
+7. Predicting the values for the quiz
+
+## Data download and analyis setup
+
+```{r}
+library(ggplot2)
+library(caret)
+library(randomForest)
+
+url_train <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url_quiz  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"	
+
+	file_train <- "pml-training.csv"
+	file_quiz <- "pml-testing.csv"
+
+	if (!file.exists(file_train)) {download.file(url_train, file_train)	}
+	if (!file.exists(file_quiz)) {download.file(url_quiz, file_quiz) }
+	
+  pml_train_org <- read.csv(file_train)
+  pml_quiz <- read.csv(file_quiz)
+ 
+
+```
+
+## Data Exploration
+
+Some basic data exploration unveils that the data set could be seen as being comprised of two parts:
+1. Individual records generated at high frequency - without derived values for mean, standard deviation and alike.
+2. Complete records including derived values like for the mean and standard deviation for the sensor data within a sliding window. Some records include a "#DIV/0!" statement in particular for higher momenta skewness and kurtosis.
+
+The original authors focus on analyzing the data set based on 17 features, which are exclusively from derived values like mean, maximum, minimum, variance and range. The data set with complete cases includes only 460 records in contrast to 159 variables. Even more importantly the "testing"" data that will give the answer to the quiz does not include any of the derived features, so the prediction needs to be based on an analysis without derived features. In order to accomplish this, the columns with "NA", "" or "#DIV/0!"-values will be removed from all of the data sets such that any further analysis and model does not include those derived features. For this purpose columnwise sums are being built and only 'good' columns are being selected. 
+
+```{r}  
+  sum_bad_cols <- vector(length=160)  
+  for (i in 1:160) {
+      sum_bad_cols[i] <- sum(sum(is.na(pml_train_org[,i])),sum(na.omit(pml_train_org[,i] == "")),
+                           sum(na.omit(pml_train_org[,i] == "#DIV/0!")))  
+  }
+  col_ind <- sum_bad_cols == 0
+
+  pml_train_org_clean <- pml_train_org[,col_ind]
+  pml_quiz_clean <- pml_quiz[,col_ind]
+```  
+  
+## Cross validation - splitting data
+
+The "training" data is being split into 3 parts: training (60%), test(20%) and validation(20%). 
+The reason is that the original "testing" set with 20 records is far to small to allow cross validation with statistical significance and will be only used to answer the quiz. Given the number of samples and the number of variables in the data set, it is expected that quite a bit work on model selection is required. Hence independent "testing" and "validation" sets are being generated, as the "testing" data set will play a role in model selection and therefore is part of the training set in some way. "Testing" and "validation" sets are selected to be of similar size.  
+  
+```{r}   
+  set.seed(1101959)
+  in_train_org <- createDataPartition(y=pml_train_org_clean$classe, p=0.8,list=FALSE)
+  pml_train <- pml_train_org_clean[in_train_org,]
+  pml_val <- pml_train_org_clean[-in_train_org,]
+  
+  in_train <- createDataPartition(y=pml_train$classe, p=0.75,list=FALSE)
+  pml_test <- pml_train[-in_train,]
+  pml_train <- pml_train[in_train,]
+  
+```
+
+## Feature selection considerations
+
+There remains a high number of potential features (59 in total) that need further investigations leading hopefully to an elimination of insignificant variables for the analysis. Looking at the near-zero-variance and the correlation-matrix there are no obvious candidates for features apparent. Using "findCorrelation" with varying cutoff values, it becomes apparent that correlations values (absolute) span the whole range between 0 and 1, meaning that there are also no obvious good candidates for the features. Please note that the output from these steps in the data analysis are not shown due to space limitations.
+
+## Model building with Principal Component Analysis preprocessing
+
+With complex correlations the natural next step is to look at principal component analysis as preprossing in combination with non-linear models like Randomforest or Stochastic Gradient Boosting (methods="rf" or "gbm"). In this situation a start is being made with small number of components. It appears that PCA leaves the columns "user_name", "cvtd_timestamp" and "new_window" untouched and is not including these in the real analysis. This could be circumvented by performing an explicit preprocessing step first and generating a new data set for the final model (as opposed to the more convenient approach of using the "preProcess=" option).
+
+The following table gives a summary of the accuracy values for a matrix of PCA components vs. models "rf" and "gbm" and both training and testing data sets (all these calculations have been done outside of this .Rmd file and could be made available on request).
+
+| pcaComp       | data set        | "rf"           | "gbm"          |
+| ------------- |: --------------:|:--------------:|:--------------:|
+| 1             | Training        | 0.5876         | 0.5836         |
+| 1             | Testing         | 0.5932         | 0.5914         |
+| 2             | Training        | error          | 0.5081         |
+| 2             | Testing         | 0.4563         | 0.4726         |
+| 5             | Training        | 0.7747         | 0.7312         |
+| 5             | Testing         | 0.7219         | 0.7178         |
+| 27            | Training        | 1.0000         | training failed|
+| 27            | Testing         | 0.9812         | N/A            |
+| 30            | Training        | 1.0000         | 0.9723         |
+| 30            | Testing         | 0.9900         | 0.9559         |
+
+Figure 1. Comparison of accuracies for different models and preprocessing variables
+(tables seem to be not supported in knitr)
+
+pcaComp=1 means in this case to use solely the untouched feature "cvtd_timestamp", which produces better predictions than the two new generated components "PC1" and "PC2". As you can see the two models "rf" and "gbm" are producing similar quality results for a small (5 or less) number of features, but for higher number of features "rf" is significantly better. 
+Interestingly the approach with pcaComp as preprocessing and "rf" with default settings produces excellent prediction quality. Please note that training of models "rf" and "gbm" including all potential features either crashed or did not complete in about 12 hours processing time on the laptop available for this analysis. Other training control parameters have not been varied as part of this exercise.   
+
+## Best Model in training and validation
+
+The following code generates the best model as determined above. Please note that this requires many more steps than per default settings i.e. 
+*train(classe ~ . , method="rf",data=pml_train,preProcess="pca")* 
+which is only marginally worse than the best one.
+    
+```{r}   
+  pca_thres_95 <- preProcess(pml_train[,-60],method="pca",thres=0.95)
+
+  pp_pca_train95 <- predict(pca_thres_95,pml_train[,-60])  
+  pp_pca_test95 <- predict(pca_thres_95,pml_test[,-60])
+  pp_pca_val95 <- predict(pca_thres_95,pml_val[,-60])
+  pp_pca_quiz95 <- predict(pca_thres_95,pml_quiz_clean[,-60])
+  
+  pp_pca_train95 <- cbind(pp_pca_train95,pml_train[60])
+  pp_pca_test95 <- cbind(pp_pca_test95,pml_test[60])
+  pp_pca_val95 <- cbind(pp_pca_val95,pml_val[60])
+  pp_pca_quiz95 <- cbind(pp_pca_quiz95,pml_quiz_clean[60])
+  
+  pp_col_names <- colnames(pp_pca_train95)
+  pp_col_names[31] <- "classe"
+ 
+  colnames(pp_pca_train95) <- pp_col_names
+  colnames(pp_pca_test95) <- pp_col_names
+  colnames(pp_pca_val95) <- pp_col_names
+  
+  
+  pml_rf_pca30 <- train(classe ~ . , method="rf",data=pp_pca_train95)
+  
+  pml_rf_pca30
+  
+```
+
+Fig. 2 Final RandomForest model properties
+```{r}  
+  
+  confusionMatrix(pp_pca_train95$classe,predict(pml_rf_pca30,pp_pca_train95))
+```
+
+Fig. 3 confusionMatrix of training data set
+```{r}  
+  
+  confusionMatrix(pp_pca_val95$classe,predict(pml_rf_pca30,pp_pca_val95))
+```
+
+Fig. 4 confusionMatrix of validation data set
+
+
+## Conclusion
+
+As you can see from the above confusionMatrices the in-sample-error is exactly 0 and the out-of-sample error on the validation set is in the range of 1%. Please note all other properties of the confusionMatrices.
+This means the above steps in the analysis has produced a high quality result that allows the execution of the prediction for the quiz.
+
+```{r}  
+  
+  predict(pml_rf_pca30,pp_pca_quiz95)
+```
+Fig. 5 Prediction for Quiz
+
+### Acknowledgements
+
+Special thanks to the authors of the following publication:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. 
+Qualitative Activity Recognition of Weight Lifting Exercises. 
+Proceedings of 4th Augmented Human (AH) International Conference in cooperation with ACM SIGCHI (Augmented Human'13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
+
+http://web.archive.org/web/20161217164008/http://groupware.les.inf.puc-rio.br:80/work.jsf?p1=11201
